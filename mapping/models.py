@@ -210,13 +210,13 @@ class Equity(BaseModel):
 
 class StatementOfFinancialPosition(BaseModel):
     """Balance sheet information"""
-    currentAssets: CurrentAssets
-    nonCurrentAssets: NonCurrentAssets
+    CurrentAssets: CurrentAssets
+    NonCurrentAssets: NonCurrentAssets
     Assets: float = Field(...,  description="Total assets (CurrentAssets + NoncurrentAssets)")
-    currentLiabilities: CurrentLiabilities
-    nonCurrentLiabilities: NonCurrentLiabilities
+    CurrentLiabilities: CurrentLiabilities
+    NonCurrentLiabilities: NonCurrentLiabilities
     Liabilities: float = Field(...,  description="Total liabilities (CurrentLiabilities + NoncurrentLiabilities)")
-    equity: Equity
+    Equity: Equity
     
     class Config:
         extra = "forbid"  # Equivalent to strict() in Zod
@@ -283,18 +283,18 @@ class Revenue(BaseModel):
 
 class Notes(BaseModel):
     """Notes to financial statements"""
-    tradeAndOtherReceivables: TradeAndOtherReceivables
-    tradeAndOtherPayables: TradeAndOtherPayables
-    revenue: Revenue
+    TradeAndOtherReceivables: TradeAndOtherReceivables
+    TradeAndOtherPayables: TradeAndOtherPayables
+    Revenue: Revenue
     
     class Config:
         title = "Comprehensive financial statement schema compliant with Singapore Simplified XBRL requirements"
 
 class PartialXBRL(BaseModel):
     """Singapore XBRL schema"""
-    filingInformation: FilingInformation
-    directorsStatement: DirectorsStatement
-    auditReport: AuditReport
-    statementOfFinancialPosition: StatementOfFinancialPosition
-    incomeStatement: IncomeStatement
-    notes: Notes
+    FilingInformation: FilingInformation
+    DirectorsStatement: DirectorsStatement
+    AuditReport: AuditReport
+    StatementOfFinancialPosition: StatementOfFinancialPosition
+    IncomeStatement: IncomeStatement
+    Notes: Notes

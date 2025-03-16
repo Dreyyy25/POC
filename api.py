@@ -4,6 +4,7 @@ API endpoint for the XBRL mapping and tagging service.
 import os
 import json
 from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
@@ -19,7 +20,7 @@ from tagging.dependencies import sg_xbrl_deps
 load_dotenv()
 
 # Configure logging
-logfire.configure(console=False)
+logfire.configure(console=False, inspect_arguments=False)
 logfire.instrument_openai()  # Track OpenAI API calls
 
 # Validate that required environment variables are set
@@ -128,22 +129,41 @@ async def tag_financial_data(data: FinancialStatementData):
     try:
         logfire.info("Starting XBRL tagging process")
         
-        # Process data through tagging agent
+        # Convert to JSON string and include in the prompt
+        data_json = json.dumps(data.data, indent=4)
+        logfire.debug("Input data prepared for tagging", data_size=len(data_json))
+        
+        # IMPORTANT: Only pass the prompt string and deps parameter - nothing else
         tagged_result = await xbrl_tagging_agent.run(
-            f'Please apply appropriate XBRL tags to this financial data',
-            deps=sg_xbrl_deps,
-            data=data.data  # Pass data directly
+            f'Please apply appropriate XBRL tags to this financial data: {data_json}',
+            deps=sg_xbrl_deps
         )
         
+        # Fix: Call get_all_tags() on tagged_result.data, not on tagged_result
         logfire.info("XBRL tagging completed successfully", 
-                    tags_count=len(tagged_result.get_all_tags()))
+                    tags_count=len(tagged_result.data.get_all_tags()))
+        
+        # Convert tagged data to dictionary
+        if hasattr(tagged_result.data, 'model_dump'):  # Pydantic v2
+            tagged_data_dict = tagged_result.data.model_dump()
+        elif hasattr(tagged_result.data, 'dict'):      # Pydantic v1
+            tagged_data_dict = tagged_result.data.dict()
+        else:
+            # Fallback to manual conversion
+            tagged_data_dict = {k: v for k, v in tagged_result.data.__dict__.items() 
+                                if not k.startswith('_')}
         
         return {
-            "tagged_data": tagged_result.data,
-            "tags": tagged_result.get_all_tags()
+            "tagged_data": tagged_data_dict,
+            "tags": tagged_result.data.get_all_tags()
         }
     except Exception as e:
-        logfire.exception("Error during XBRL tagging", error=str(e))
+        # Enhanced error logging
+        logfire.exception(
+            "Error during XBRL tagging", 
+            error=str(e),
+            error_type=type(e).__name__
+        )
         raise HTTPException(status_code=500, detail=f"Tagging error: {str(e)}")
 
 @app.post("/api/process", response_model=CombinedResponse)
@@ -160,33 +180,86 @@ async def process_financial_data(data: FinancialStatementData):
         )
         
         logfire.info("Financial data mapping completed")
-        
-        # Step 2: Tag mapped data
-        tagged_result = await xbrl_tagging_agent.run(
-            f'Please apply appropriate XBRL tags to this financial data: {result_mapping}',
-            deps=sg_xbrl_deps
-        )
-        
-        logfire.info("XBRL tagging completed", 
-                    tags_count=len(tagged_result.get_all_tags()))
-        
-        # Convert Pydantic models to dictionaries for response
+
+        # Convert the mapped data to JSON with simplification for large structures
         if hasattr(result_mapping.data, 'model_dump'):
             mapped_data_dict = result_mapping.data.model_dump()
         elif hasattr(result_mapping.data, 'dict'):
             mapped_data_dict = result_mapping.data.dict()
         else:
+            # Fallback to manual conversion
             mapped_data_dict = {k: v for k, v in result_mapping.data.__dict__.items() 
-                              if not k.startswith('_')}
+                                if not k.startswith('_')}
+        
+        # Simplify very large JSON structures if needed
+        if len(json.dumps(mapped_data_dict)) > 50000:  # If JSON is very large
+            logfire.warning("Large data structure detected, simplifying for processing")
+            # Keep only essential fields
+            simplified_data = {}
+            for section_name, section in mapped_data_dict.items():
+                if isinstance(section, dict) and len(section) > 20:  # Large section
+                    # Keep only up to 20 items per section
+                    simplified_data[section_name] = {k: section[k] for k in list(section.keys())[:20]}
+                else:
+                    simplified_data[section_name] = section
+            mapped_data_dict = simplified_data
+        
+        # Convert to JSON for the prompt
+        mapped_data_json = json.dumps(mapped_data_dict, indent=4)
+        
+        # Step 2: Tag mapped data - with explicit instruction to limit complexity
+        tagged_result = await xbrl_tagging_agent.run(
+            f'Please apply appropriate XBRL tags to this financial data. Focus on the most important elements first and limit complexity: {mapped_data_json}',
+            deps=sg_xbrl_deps
+        )
+        
+        logfire.info("XBRL tagging completed", 
+                    tags_count=len(tagged_result.data.get_all_tags()))
+        
+        # Convert tagged data to dictionary
+        if hasattr(tagged_result.data, 'model_dump'):  # Pydantic v2
+            tagged_data_dict = tagged_result.data.model_dump()
+        elif hasattr(tagged_result.data, 'dict'):      # Pydantic v1
+            tagged_data_dict = tagged_result.data.dict()
+        else:
+            # Fallback to manual conversion
+            tagged_data_dict = {k: v for k, v in tagged_result.data.__dict__.items() 
+                                if not k.startswith('_')}
         
         return {
             "mapped_data": mapped_data_dict,
-            "tagged_data": tagged_result.data,
-            "tags": tagged_result.get_all_tags()
+            "tagged_data": tagged_data_dict,
+            "tags": tagged_result.data.get_all_tags()
         }
     except Exception as e:
-        logfire.exception("Error during combined process", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+        # Enhanced error logging with more details
+        error_type = type(e).__name__
+        error_details = str(e)
+        
+        # For tool retry errors, provide more helpful information
+        if "Tool exceeded max retries" in error_details:
+            error_details = f"A processing tool failed multiple times. Try breaking down your data into smaller sections or simplifying complex financial statements."
+        
+        logfire.exception(
+            "Error during combined process", 
+            error=error_details,
+            error_type=error_type
+        )
+        
+        # Return partial results if available
+        if 'result_mapping' in locals():
+            partial_response = {
+                "status": "partial_success",
+                "mapped_data": mapped_data_dict if 'mapped_data_dict' in locals() else {},
+                "error": error_details
+            }
+            # Return what we have with status code 207 Multi-Status
+            return JSONResponse(
+                status_code=207,
+                content=partial_response
+            )
+            
+        raise HTTPException(status_code=500, detail=f"Processing error: {error_details}")
 
 # Run with: uvicorn api:app --reload
 if __name__ == "__main__":

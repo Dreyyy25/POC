@@ -30,6 +30,9 @@ The XBRL Mapping and Tagging API converts financial statements into standardized
 ## API Endpoints
 The API provides three main endpoints for different processing needs:
 
+### Base URL
+`http://127.0.0.1:8000`
+
 ### 1. Map Financial Data (`/api/map`)
 Converts raw financial data into a standardized format.
 
@@ -196,3 +199,12 @@ curl -X POST http://localhost:8000/api/map \
 * **Timeout Errors**: Large or complex statements may exceed processing limits
 * **Missing Tags**: Check if your financial terms match the standard terminology
 * **Validation Errors**: Compare your input with the example data format
+* **Changes doesn't reflect to the API**:
+```bash
+  # Stop all Python processes (replace with proper process termination for your OS)
+  # On Windows:
+  taskkill /f /im python.exe
+
+  # Restart the server
+  uvicorn api:app --reload
+```
